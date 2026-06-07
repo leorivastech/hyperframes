@@ -243,6 +243,11 @@ export function splitElementInHtml(
   clone.setAttribute("data-start", String(Math.round(splitTime * 1000) / 1000));
   clone.setAttribute("data-duration", String(Math.round(secondDuration * 1000) / 1000));
 
+  // Remove the "clip" class from the clone — it forces opacity:0 for entrance
+  // animations, but the split element continues mid-stream and doesn't need one.
+  // The runtime manages visibility via visibility:hidden/visible based on timing.
+  clone.classList.remove("clip");
+
   // Adjust media trim offset for the second half
   const playbackStartAttr = el.hasAttribute("data-playback-start")
     ? "data-playback-start"

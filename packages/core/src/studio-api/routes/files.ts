@@ -651,6 +651,14 @@ export function registerFileRoutes(api: Hono, adapter: StudioApiAdapter): void {
           keyframes: Array<{ percentage: number; properties: Record<string, number | string> }>;
           easeEach?: string;
         }>;
+      }
+    | {
+        type: "split-animations";
+        originalId: string;
+        newId: string;
+        splitTime: number;
+        elementStart: number;
+        elementDuration: number;
       };
 
   api.post("/projects/:id/gsap-mutations/*", async (c) => {
@@ -702,19 +710,23 @@ export function registerFileRoutes(api: Hono, adapter: StudioApiAdapter): void {
 
     // fallow-ignore-next-line complexity
     switch (body.type) {
-      case "update-property": {
+      case "update-property":
+      case "add-property": {
         const r = requireAnimation(block.scriptText, body.animationId);
         if ("err" in r) return r.err;
+        const val = body.type === "update-property" ? body.value : body.defaultValue;
         newScript = updateAnimationInScript(block.scriptText, body.animationId, {
-          properties: { ...r.anim.properties, [body.property]: body.value },
+          properties: { ...r.anim.properties, [body.property]: val },
         });
         break;
       }
-      case "update-from-property": {
+      case "update-from-property":
+      case "add-from-property": {
         const r = requireFromToAnimation(block.scriptText, body.animationId);
         if ("err" in r) return r.err;
+        const val = body.type === "update-from-property" ? body.value : body.defaultValue;
         newScript = updateAnimationInScript(block.scriptText, body.animationId, {
-          fromProperties: { ...(r.anim.fromProperties ?? {}), [body.property]: body.value },
+          fromProperties: { ...(r.anim.fromProperties ?? {}), [body.property]: val },
         });
         break;
       }
@@ -740,22 +752,6 @@ export function registerFileRoutes(api: Hono, adapter: StudioApiAdapter): void {
       }
       case "delete": {
         newScript = removeAnimationFromScript(block.scriptText, body.animationId);
-        break;
-      }
-      case "add-property": {
-        const r = requireAnimation(block.scriptText, body.animationId);
-        if ("err" in r) return r.err;
-        newScript = updateAnimationInScript(block.scriptText, body.animationId, {
-          properties: { ...r.anim.properties, [body.property]: body.defaultValue },
-        });
-        break;
-      }
-      case "add-from-property": {
-        const r = requireFromToAnimation(block.scriptText, body.animationId);
-        if ("err" in r) return r.err;
-        newScript = updateAnimationInScript(block.scriptText, body.animationId, {
-          fromProperties: { ...(r.anim.fromProperties ?? {}), [body.property]: body.defaultValue },
-        });
         break;
       }
       case "remove-property": {
@@ -833,6 +829,17 @@ export function registerFileRoutes(api: Hono, adapter: StudioApiAdapter): void {
             body.resolvedSelector,
           );
         }
+        break;
+      }
+      case "split-animations": {
+        const { splitAnimationsInScript } = await loadGsapParser();
+        newScript = splitAnimationsInScript(block.scriptText, {
+          originalId: body.originalId,
+          newId: body.newId,
+          splitTime: body.splitTime,
+          elementStart: body.elementStart,
+          elementDuration: body.elementDuration,
+        });
         break;
       }
       default:

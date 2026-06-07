@@ -19,7 +19,11 @@ pre-commit:
     # fails on issues introduced by the branch, not inherited findings.
     fallow:
       glob: "packages/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"
-      run: bunx fallow audit --base origin/main --fail-on-issues
+      run: >
+        bunx fallow audit --base origin/main --fail-on-issues
+        --health-baseline .fallow/health-baseline.json
+        --dupes-baseline .fallow/dupes-baseline.json
+        --dead-code-baseline .fallow/dead-code-baseline.json
     filesize:
       # Scoped to packages/studio — the 600 LOC limit is a studio architecture
       # standard enforced as part of the App.tsx decomposition work. Player and

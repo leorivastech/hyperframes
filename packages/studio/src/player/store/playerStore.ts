@@ -43,6 +43,7 @@ export interface TimelineElement {
 }
 
 export type ZoomMode = "fit" | "manual";
+type TimelineTool = "select" | "razor";
 
 interface PlayerState {
   isPlaying: boolean;
@@ -62,6 +63,9 @@ interface PlayerState {
   inPoint: number | null;
   /** Work-area out-point (seconds). When set, loop ends here and E jumps here. */
   outPoint: number | null;
+
+  activeTool: TimelineTool;
+  setActiveTool: (tool: TimelineTool) => void;
 
   /** Set of selected keyframe keys in format `${elementId}:${percentage}`. */
   selectedKeyframes: Set<string>;
@@ -127,6 +131,9 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   manualZoomPercent: 100,
   inPoint: null,
   outPoint: null,
+
+  activeTool: "select",
+  setActiveTool: (tool) => set({ activeTool: tool }),
 
   selectedKeyframes: new Set(),
   toggleSelectedKeyframe: (key) =>
@@ -209,6 +216,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
       selectedElementId: null,
       inPoint: null,
       outPoint: null,
+      activeTool: "select",
       selectedKeyframes: new Set(),
       keyframeCache: new Map(),
     }),

@@ -536,6 +536,8 @@ export function StudioApp() {
                   handleTimelineElementResize={timelineEditing.handleTimelineElementResize}
                   handleBlockedTimelineEdit={timelineEditing.handleBlockedTimelineEdit}
                   handleTimelineElementSplit={timelineEditing.handleTimelineElementSplit}
+                  handleRazorSplit={timelineEditing.handleRazorSplit}
+                  handleRazorSplitAll={timelineEditing.handleRazorSplitAll}
                   setCompIdToSrc={setCompIdToSrc}
                   setCompositionLoading={setCompositionLoading}
                   shouldShowSelectedDomBounds={shouldShowSelectedDomBounds}

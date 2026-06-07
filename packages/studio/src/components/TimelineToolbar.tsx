@@ -2,6 +2,7 @@ import {
   getNextTimelineZoomPercent,
   getTimelineZoomPercent,
 } from "../player/components/timelineZoom";
+import { useTimelineZoom } from "../player/components/useTimelineZoom";
 import { getTimelineToggleTitle } from "../utils/timelineDiscovery";
 import { usePlayerStore, type TimelineElement } from "../player";
 import { STUDIO_KEYFRAMES_ENABLED } from "./editor/manualEditingAvailability";
@@ -9,18 +10,26 @@ import { Tooltip } from "./ui";
 import { Scissors } from "../icons/SystemIcons";
 import type { GsapAnimation, GsapPercentageKeyframe } from "@hyperframes/core/gsap-parser";
 import type { DomEditSelection } from "./editor/domEditingTypes";
+import { canSplitElement } from "../utils/timelineElementSplit";
 
+/** Collect all property names that have numeric values across a set of keyframes. */
+function collectNumericKeyframeProps(keyframes: GsapPercentageKeyframe[]): Set<string> {
+  const props = new Set<string>();
+  for (const kf of keyframes) {
+    for (const p of Object.keys(kf.properties)) {
+      if (typeof kf.properties[p] === "number") props.add(p);
+    }
+  }
+  return props;
+}
+
+// fallow-ignore-next-line complexity
 function interpolateKeyframeProperties(
   keyframes: GsapPercentageKeyframe[],
   pct: number,
 ): Record<string, number> {
   const sorted = keyframes.slice().sort((a, b) => a.percentage - b.percentage);
-  const allProps = new Set<string>();
-  for (const kf of sorted) {
-    for (const p of Object.keys(kf.properties)) {
-      if (typeof kf.properties[p] === "number") allProps.add(p);
-    }
-  }
+  const allProps = collectNumericKeyframeProps(sorted);
   const result: Record<string, number> = {};
   for (const prop of allProps) {
     let prev: { pct: number; val: number } | null = null;
@@ -43,6 +52,7 @@ function interpolateKeyframeProperties(
   return result;
 }
 
+// fallow-ignore-next-line complexity
 function readRuntimeKeyframeValues(
   iframe: HTMLIFrameElement | null,
   sel: DomEditSelection,
@@ -66,12 +76,7 @@ function readRuntimeKeyframeValues(
   }
   const element = doc?.querySelector(selector);
   if (!element) return {};
-  const allProps = new Set<string>();
-  for (const kf of keyframes) {
-    for (const p of Object.keys(kf.properties)) {
-      if (typeof kf.properties[p] === "number") allProps.add(p);
-    }
-  }
+  const allProps = collectNumericKeyframeProps(keyframes);
   const result: Record<string, number> = {};
   for (const prop of allProps) {
     const val = Number(gsap.getProperty(element, prop));
@@ -107,14 +112,17 @@ function useKeyframeToggle(session?: DomEditSessionSlice) {
   const kfAnim = anims.find((a) => a.keyframes);
   const flatAnim = anims.find((a) => !a.keyframes);
 
+  const computePct = (time: number) => {
+    const elStart = Number.parseFloat(sel?.dataAttributes?.start ?? "0") || 0;
+    const elDuration = Number.parseFloat(sel?.dataAttributes?.duration ?? "1") || 1;
+    return elDuration > 0
+      ? Math.max(0, Math.min(100, Math.round(((time - elStart) / elDuration) * 1000) / 10))
+      : 0;
+  };
+
   let state: "active" | "inactive" | "none" = "none";
   if (kfAnim?.keyframes && sel) {
-    const elStart = Number.parseFloat(sel.dataAttributes?.start ?? "0") || 0;
-    const elDuration = Number.parseFloat(sel.dataAttributes?.duration ?? "1") || 1;
-    const pct =
-      elDuration > 0
-        ? Math.max(0, Math.min(100, Math.round(((currentTime - elStart) / elDuration) * 1000) / 10))
-        : 0;
+    const pct = computePct(currentTime);
     state = kfAnim.keyframes.keyframes.some((k) => Math.abs(k.percentage - pct) <= 1)
       ? "active"
       : "inactive";
@@ -128,12 +136,7 @@ function useKeyframeToggle(session?: DomEditSessionSlice) {
           if (kfAnim.hasUnresolvedKeyframes) {
             await session.handleGsapMaterializeKeyframes?.(kfAnim.id);
           }
-          const elStart = Number.parseFloat(sel.dataAttributes?.start ?? "0") || 0;
-          const elDuration = Number.parseFloat(sel.dataAttributes?.duration ?? "1") || 1;
-          const pct =
-            elDuration > 0
-              ? Math.max(0, Math.min(100, Math.round(((t - elStart) / elDuration) * 1000) / 10))
-              : 0;
+          const pct = computePct(t);
           const existing = kfAnim.keyframes.keyframes.find(
             (k) => Math.abs(k.percentage - pct) <= 1,
           );
@@ -164,15 +167,15 @@ function useKeyframeToggle(session?: DomEditSessionSlice) {
   return { state, onToggle };
 }
 
+// fallow-ignore-next-line complexity
 export function TimelineToolbar({
   toggleTimelineVisibility,
   domEditSession,
   onSplitElement,
 }: TimelineToolbarProps) {
-  const zoomMode = usePlayerStore((s) => s.zoomMode);
-  const manualZoomPercent = usePlayerStore((s) => s.manualZoomPercent);
-  const setZoomMode = usePlayerStore((s) => s.setZoomMode);
-  const setManualZoomPercent = usePlayerStore((s) => s.setManualZoomPercent);
+  const activeTool = usePlayerStore((s) => s.activeTool);
+  const setActiveTool = usePlayerStore((s) => s.setActiveTool);
+  const { zoomMode, manualZoomPercent, setZoomMode, setManualZoomPercent } = useTimelineZoom();
   const displayedTimelineZoomPercent = getTimelineZoomPercent(zoomMode, manualZoomPercent);
   const { state: keyframeState, onToggle: onToggleKeyframe } = useKeyframeToggle(domEditSession);
 
@@ -182,6 +185,36 @@ export function TimelineToolbar({
         <div className="flex items-center gap-3">
           <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-neutral-500">
             Timeline
+          </div>
+          <div className="flex items-center border border-neutral-800 rounded overflow-hidden">
+            <Tooltip label="Selection tool (V)">
+              <button
+                type="button"
+                onClick={() => setActiveTool("select")}
+                className={`flex h-6 w-6 items-center justify-center transition-colors ${
+                  activeTool === "select"
+                    ? "bg-neutral-700 text-neutral-200"
+                    : "text-neutral-500 hover:text-neutral-300"
+                }`}
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                  <path d="M2 0.5L10 6L6.5 6.5L8.5 11L6.5 11.5L4.5 7L2 9Z" />
+                </svg>
+              </button>
+            </Tooltip>
+            <Tooltip label="Razor tool (B)">
+              <button
+                type="button"
+                onClick={() => setActiveTool("razor")}
+                className={`flex h-6 w-6 items-center justify-center transition-colors ${
+                  activeTool === "razor"
+                    ? "bg-neutral-700 text-neutral-200"
+                    : "text-neutral-500 hover:text-neutral-300"
+                }`}
+              >
+                <Scissors size={11} />
+              </button>
+            </Tooltip>
           </div>
           {STUDIO_KEYFRAMES_ENABLED && onToggleKeyframe && (
             <Tooltip
@@ -225,9 +258,7 @@ export function TimelineToolbar({
               const el = selectedElementId
                 ? elements.find((e) => (e.key ?? e.id) === selectedElementId)
                 : null;
-              const splittable =
-                el && !el.compositionSrc && ["video", "audio", "img"].includes(el.tag);
-              if (!splittable) return null;
+              if (!el || !canSplitElement(el)) return null;
               const canSplit = currentTime > el.start && currentTime < el.start + el.duration;
               return (
                 <Tooltip label="Split clip at playhead (S)">

@@ -16,9 +16,18 @@ import {
   updateKeyframeInScript,
   convertToKeyframesInScript,
   removeAllKeyframesFromScript,
+  splitAnimationsInScript,
 } from "./gsapParser.js";
 import type { GsapAnimation } from "./gsapParser.js";
 import type { Keyframe } from "../core.types";
+import {
+  parseAndSerialize,
+  parseSingleAnimation,
+  expectKeyframe,
+  expectKeyframesFormat,
+  convertAndReparse,
+  parseSplitAndAssert,
+} from "./gsapParser.test-helpers.js";
 
 describe("parseGsapScript", () => {
   it("parses a basic timeline with .to()", () => {
@@ -298,11 +307,7 @@ describe("stagger/yoyo/repeat round-trip", () => {
       const tl = gsap.timeline({ paused: true });
       tl.to(".items", { opacity: 1, duration: 0.5, stagger: { each: 0.15, from: "start" } }, 0);
     `;
-    const parsed = parseGsapScript(script);
-    const serialized = serializeGsapAnimations(parsed.animations, parsed.timelineVar, {
-      preamble: parsed.preamble,
-      postamble: parsed.postamble,
-    });
+    const { serialized } = parseAndSerialize(script);
 
     expect(serialized).toContain("stagger: {");
     expect(serialized).toContain("each: 0.15");
@@ -314,11 +319,7 @@ describe("stagger/yoyo/repeat round-trip", () => {
       const tl = gsap.timeline({ paused: true });
       tl.to("#el1", { x: 100, duration: 1, yoyo: true, repeat: 3, repeatDelay: 0.2 }, 0);
     `;
-    const parsed = parseGsapScript(script);
-    const serialized = serializeGsapAnimations(parsed.animations, parsed.timelineVar, {
-      preamble: parsed.preamble,
-      postamble: parsed.postamble,
-    });
+    const { serialized } = parseAndSerialize(script);
 
     expect(serialized).toContain("yoyo: true");
     expect(serialized).toContain("repeat: 3");
@@ -348,11 +349,7 @@ describe("unresolvable value round-trip", () => {
       const tl = gsap.timeline({ paused: true });
       tl.to("#el1", { opacity: someFn(), x: 50, duration: 1 }, 0);
     `;
-    const parsed = parseGsapScript(script);
-    const serialized = serializeGsapAnimations(parsed.animations, parsed.timelineVar, {
-      preamble: parsed.preamble,
-      postamble: parsed.postamble,
-    });
+    const { serialized } = parseAndSerialize(script);
 
     // The raw expression should survive — emitted without quotes
     expect(serialized).toContain("opacity: someFn()");
@@ -1100,9 +1097,8 @@ describe("gsap.utils.toArray targets", () => {
       const tl = gsap.timeline({ paused: true });
       tl.to(gsap.utils.toArray(".item"), { opacity: 1, duration: 0.5, stagger: 0.1 }, 0);
     `;
-    const result = parseGsapScript(script);
-    expect(result.animations).toHaveLength(1);
-    expect(result.animations[0].targetSelector).toBe(".item");
+    const anim = parseSingleAnimation(script);
+    expect(anim.targetSelector).toBe(".item");
   });
 
   it("resolves a toArray result stored in a variable", () => {
@@ -1111,8 +1107,8 @@ describe("gsap.utils.toArray targets", () => {
       const tl = gsap.timeline({ paused: true });
       tl.to(items, { opacity: 1, duration: 0.5 }, 0);
     `;
-    const result = parseGsapScript(script);
-    expect(result.animations[0].targetSelector).toBe(".item");
+    const anim = parseSingleAnimation(script);
+    expect(anim.targetSelector).toBe(".item");
   });
 });
 
@@ -1146,9 +1142,8 @@ describe("forEach / map callback targets", () => {
         tl.to(el, { opacity: 1, duration: 0.4 }, 0);
       });
     `;
-    const result = parseGsapScript(script);
-    expect(result.animations).toHaveLength(1);
-    expect(result.animations[0].targetSelector).toBe(".item");
+    const anim = parseSingleAnimation(script);
+    expect(anim.targetSelector).toBe(".item");
   });
 
   it("resolves an inline querySelectorAll().forEach callback param", () => {
@@ -1158,8 +1153,8 @@ describe("forEach / map callback targets", () => {
         tl.to(dot, { scale: 1, duration: 0.3 }, 0);
       });
     `;
-    const result = parseGsapScript(script);
-    expect(result.animations[0].targetSelector).toBe(".dot");
+    const anim = parseSingleAnimation(script);
+    expect(anim.targetSelector).toBe(".dot");
   });
 });
 
@@ -1204,23 +1199,12 @@ describe("native GSAP keyframes parsing", () => {
         duration: 5
       }, 0);
     `;
-    const result = parseGsapScript(script);
-    expect(result.animations).toHaveLength(1);
-    const anim = result.animations[0];
-    expect(anim.keyframes).toBeDefined();
-    expect(anim.keyframes!.format).toBe("percentage");
-    expect(anim.keyframes!.keyframes).toHaveLength(3);
+    const anim = parseSingleAnimation(script);
+    const kfs = expectKeyframesFormat(anim, "percentage", 3);
 
-    expect(anim.keyframes!.keyframes[0].percentage).toBe(0);
-    expect(anim.keyframes!.keyframes[0].properties.x).toBe(0);
-    expect(anim.keyframes!.keyframes[0].properties.opacity).toBe(1);
-
-    expect(anim.keyframes!.keyframes[1].percentage).toBe(50);
-    expect(anim.keyframes!.keyframes[1].properties.x).toBe(100);
-    expect(anim.keyframes!.keyframes[1].ease).toBe("power2.out");
-
-    expect(anim.keyframes!.keyframes[2].percentage).toBe(100);
-    expect(anim.keyframes!.keyframes[2].properties.x).toBe(200);
+    expectKeyframe(kfs[0], 0, { x: 0, opacity: 1 });
+    expectKeyframe(kfs[1], 50, { x: 100 }, "power2.out");
+    expectKeyframe(kfs[2], 100, { x: 200 });
   });
 
   it("parses object array keyframes format", () => {
@@ -1234,26 +1218,15 @@ describe("native GSAP keyframes parsing", () => {
         ]
       }, 0);
     `;
-    const result = parseGsapScript(script);
-    expect(result.animations).toHaveLength(1);
-    const anim = result.animations[0];
-    expect(anim.keyframes).toBeDefined();
-    expect(anim.keyframes!.format).toBe("object-array");
-    expect(anim.keyframes!.keyframes).toHaveLength(3);
+    const anim = parseSingleAnimation(script);
+    const kfs = expectKeyframesFormat(anim, "object-array", 3);
 
     // Total duration = 0.5 + 1 + 0.8 = 2.3
-    expect(anim.keyframes!.keyframes[0].percentage).toBe(0);
-    expect(anim.keyframes!.keyframes[0].properties.x).toBe(0);
-    expect(anim.keyframes!.keyframes[0].properties.opacity).toBe(1);
-
+    expectKeyframe(kfs[0], 0, { x: 0, opacity: 1 });
     // Second: cumulative = 0.5, pct = round(0.5/2.3 * 100) = 22
-    expect(anim.keyframes!.keyframes[1].percentage).toBe(22);
-    expect(anim.keyframes!.keyframes[1].properties.x).toBe(100);
-    expect(anim.keyframes!.keyframes[1].ease).toBe("power2.out");
-
+    expectKeyframe(kfs[1], 22, { x: 100 }, "power2.out");
     // Third: cumulative = 1.5, pct = round(1.5/2.3 * 100) = 65
-    expect(anim.keyframes!.keyframes[2].percentage).toBe(65);
-    expect(anim.keyframes!.keyframes[2].properties.x).toBe(200);
+    expectKeyframe(kfs[2], 65, { x: 200 });
   });
 
   it("parses simple array keyframes format", () => {
@@ -1264,30 +1237,17 @@ describe("native GSAP keyframes parsing", () => {
         duration: 5
       }, 0);
     `;
-    const result = parseGsapScript(script);
-    expect(result.animations).toHaveLength(1);
-    const anim = result.animations[0];
+    const anim = parseSingleAnimation(script);
     expect(anim.keyframes).toBeDefined();
     expect(anim.keyframes!.format).toBe("simple-array");
     expect(anim.keyframes!.easeEach).toBe("power2.inOut");
     expect(anim.keyframes!.keyframes).toHaveLength(4);
 
     // Evenly spaced: 0%, 33%, 67%, 100%
-    expect(anim.keyframes!.keyframes[0].percentage).toBe(0);
-    expect(anim.keyframes!.keyframes[0].properties.x).toBe(0);
-    expect(anim.keyframes!.keyframes[0].properties.opacity).toBe(0);
-
-    expect(anim.keyframes!.keyframes[1].percentage).toBe(33);
-    expect(anim.keyframes!.keyframes[1].properties.x).toBe(100);
-    expect(anim.keyframes!.keyframes[1].properties.opacity).toBe(1);
-
-    expect(anim.keyframes!.keyframes[2].percentage).toBe(67);
-    expect(anim.keyframes!.keyframes[2].properties.x).toBe(200);
-    expect(anim.keyframes!.keyframes[2].properties.opacity).toBe(1);
-
-    expect(anim.keyframes!.keyframes[3].percentage).toBe(100);
-    expect(anim.keyframes!.keyframes[3].properties.x).toBe(0);
-    expect(anim.keyframes!.keyframes[3].properties.opacity).toBe(0);
+    expectKeyframe(anim.keyframes!.keyframes[0], 0, { x: 0, opacity: 0 });
+    expectKeyframe(anim.keyframes!.keyframes[1], 33, { x: 100, opacity: 1 });
+    expectKeyframe(anim.keyframes!.keyframes[2], 67, { x: 200, opacity: 1 });
+    expectKeyframe(anim.keyframes!.keyframes[3], 100, { x: 0, opacity: 0 });
   });
 
   it("parses three-level easing", () => {
@@ -1449,18 +1409,11 @@ describe("keyframe mutations", () => {
       const tl = gsap.timeline({ paused: true });
       tl.from("#title", { x: -200, opacity: 0, duration: 0.8 }, 0.3);
     `;
-    const id = getAnimId(script);
-    const updated = convertToKeyframesInScript(script, id, { x: 0, opacity: 1 });
-    const reparsed = parseGsapScript(updated);
-    const anim = reparsed.animations[0];
-
+    const anim = convertAndReparse(script, { x: 0, opacity: 1 });
     expect(anim.method).toBe("to");
-    expect(anim.keyframes).toBeDefined();
-    const kfs = anim.keyframes!.keyframes;
-    expect(kfs[0].properties.x).toBe(-200);
-    expect(kfs[0].properties.opacity).toBe(0);
-    expect(kfs[1].properties.x).toBe(0);
-    expect(kfs[1].properties.opacity).toBe(1);
+    const kfs = expectKeyframesFormat(anim, "percentage", 2);
+    expectKeyframe(kfs[0]!, 0, { x: -200, opacity: 0 });
+    expectKeyframe(kfs[1]!, 100, { x: 0, opacity: 1 });
   });
 
   it("convertToKeyframesInScript — converts fromTo() to to() + keyframes", () => {
@@ -1468,16 +1421,11 @@ describe("keyframe mutations", () => {
       const tl = gsap.timeline({ paused: true });
       tl.fromTo("#title", { x: -100 }, { x: 100, duration: 1 }, 0);
     `;
-    const id = getAnimId(script);
-    const updated = convertToKeyframesInScript(script, id);
-    const reparsed = parseGsapScript(updated);
-    const anim = reparsed.animations[0];
-
+    const anim = convertAndReparse(script);
     expect(anim.method).toBe("to");
-    expect(anim.keyframes).toBeDefined();
-    const kfs = anim.keyframes!.keyframes;
-    expect(kfs[0].properties.x).toBe(-100);
-    expect(kfs[1].properties.x).toBe(100);
+    const kfs = expectKeyframesFormat(anim, "percentage", 2);
+    expect(kfs[0]!.properties.x).toBe(-100);
+    expect(kfs[1]!.properties.x).toBe(100);
   });
 
   it("convertToKeyframesInScript — skips if already has keyframes", () => {
@@ -1502,5 +1450,156 @@ describe("keyframe mutations", () => {
     expect(anim.keyframes).toBeUndefined();
     expect(anim.properties.x).toBe(200);
     expect(anim.properties.opacity).toBe(1);
+  });
+});
+
+describe("splitAnimationsInScript", () => {
+  const baseScript = `const tl = gsap.timeline({ paused: true });`;
+  const opts = {
+    originalId: "el1",
+    newId: "el1-split",
+    splitTime: 2,
+    elementStart: 0,
+    elementDuration: 4,
+  };
+
+  it("keeps animation entirely in first half and adds set for inherited state", () => {
+    const script = `${baseScript}\ntl.to("#el1", { x: 100, duration: 1 }, 0);`;
+    const result = splitAnimationsInScript(script, opts);
+    const parsed = parseGsapScript(result);
+    const forOriginal = parsed.animations.filter((a) => a.targetSelector === "#el1");
+    const forNew = parsed.animations.filter((a) => a.targetSelector === "#el1-split");
+    expect(forOriginal).toHaveLength(1);
+    expect(forNew).toHaveLength(1);
+    expect(forNew[0]!.method).toBe("to");
+    expect(forNew[0]!.duration).toBeCloseTo(0.001);
+    expect(forNew[0]!.properties.x).toBe(100);
+    expect(forNew[0]!.position).toBe(opts.splitTime);
+  });
+
+  it("retargets animation entirely in second half to new element", () => {
+    const script = `${baseScript}\ntl.to("#el1", { x: 100, duration: 1 }, 3);`;
+    const selectors = parseSplitAndAssert(script, (s) => splitAnimationsInScript(s, opts), 1);
+    expect(selectors[0]).toBe("#el1-split");
+  });
+
+  it("duplicates animation spanning the split point", () => {
+    const script = `${baseScript}\ntl.to("#el1", { opacity: 0, duration: 4 }, 0);`;
+    const result = splitAnimationsInScript(script, opts);
+    const parsed = parseGsapScript(result);
+    const forNew = parsed.animations.filter((a) => a.targetSelector === "#el1-split");
+    const first = parsed.animations.find((a) => a.targetSelector === "#el1");
+    const continuation = forNew.find((a) => a.duration !== undefined && a.duration > 0.01);
+    const inherited = forNew.find((a) => a.duration !== undefined && a.duration < 0.01);
+    expect(first).toBeDefined();
+    expect(continuation).toBeDefined();
+    expect(first!.duration).toBe(2);
+    expect(continuation!.duration).toBe(2);
+    expect(continuation!.position).toBe(opts.splitTime);
+    expect(inherited).toBeDefined();
+    expect(inherited!.properties.opacity).toBe(0);
+  });
+
+  it("retargets multiple animations at the same position both after split", () => {
+    const script = `${baseScript}\ntl.to("#el1", { x: 100, duration: 1 }, 3);\ntl.to("#el1", { y: 200, duration: 1 }, 3);`;
+    const result = splitAnimationsInScript(script, opts);
+    const parsed = parseGsapScript(result);
+    const forOriginal = parsed.animations.filter((a) => a.targetSelector === "#el1");
+    const forNew = parsed.animations.filter((a) => a.targetSelector === "#el1-split");
+    expect(forOriginal.length).toBe(0);
+    expect(forNew.length).toBe(2);
+  });
+
+  it("returns script unchanged when no matching animations", () => {
+    const script = `${baseScript}\ntl.to("#other", { x: 100, duration: 1 }, 0);`;
+    const result = splitAnimationsInScript(script, opts);
+    expect(result).toBe(script);
+  });
+
+  it("handles multiple animations independently", () => {
+    const script = `${baseScript}
+tl.to("#el1", { x: 100, duration: 1 }, 0);
+tl.to("#el1", { y: 200, duration: 1 }, 3);`;
+    const result = splitAnimationsInScript(script, opts);
+    const parsed = parseGsapScript(result);
+    const forOriginal = parsed.animations.filter((a) => a.targetSelector === "#el1");
+    const forNew = parsed.animations.filter((a) => a.targetSelector === "#el1-split");
+    expect(forOriginal).toHaveLength(1);
+    expect(forOriginal[0]!.properties.x).toBe(100);
+    expect(forNew).toHaveLength(2);
+    const retargeted = forNew.find((a) => a.method === "to");
+    const inherited = forNew.find((a) => a.duration !== undefined && a.duration < 0.01);
+    expect(retargeted!.properties.y).toBe(200);
+    expect(inherited!.properties.x).toBe(100);
+  });
+
+  it("preserves fromTo properties on both halves", () => {
+    const script = `${baseScript}\ntl.fromTo("#el1", { opacity: 0 }, { opacity: 1, duration: 4 }, 0);`;
+    const result = splitAnimationsInScript(script, opts);
+    const parsed = parseGsapScript(result);
+    const forNew = parsed.animations.find((a) => a.targetSelector === "#el1-split");
+    expect(forNew).toBeDefined();
+    expect(forNew!.method).toBe("fromTo");
+  });
+
+  it("round-trips correctly through parseGsapScript", () => {
+    const script = `${baseScript}\ntl.to("#el1", { x: 100, duration: 4 }, 0);`;
+    const result = splitAnimationsInScript(script, opts);
+    const parsed = parseGsapScript(result);
+    expect(parsed.animations.length).toBeGreaterThanOrEqual(2);
+    for (const anim of parsed.animations) {
+      expect(typeof anim.position).toBe("number");
+      if (anim.method !== "set") expect(anim.duration).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps keyframes animation spanning split on original element", () => {
+    const script = `${baseScript}\ntl.to("#el1", { keyframes: [{ opacity: 1, duration: 1 }, { scale: 1.2, duration: 1 }, { x: 50, duration: 1 }] }, 1);`;
+    const splitOpts = {
+      originalId: "el1",
+      newId: "el1-split",
+      splitTime: 2.5,
+      elementStart: 0,
+      elementDuration: 5,
+    };
+    const result = splitAnimationsInScript(script, splitOpts);
+    const parsed = parseGsapScript(result);
+    const forOriginal = parsed.animations.filter((a) => a.targetSelector === "#el1");
+    const forNew = parsed.animations.filter((a) => a.targetSelector === "#el1-split");
+    expect(forOriginal.length).toBe(1);
+    expect(forNew.length).toBe(0);
+  });
+
+  it("retargets keyframes animation entirely after split", () => {
+    const script = `${baseScript}\ntl.to("#el1", { keyframes: [{ opacity: 1, duration: 0.5 }, { scale: 1.2, duration: 0.5 }] }, 4);`;
+    const splitOpts = {
+      originalId: "el1",
+      newId: "el1-split",
+      splitTime: 3,
+      elementStart: 0,
+      elementDuration: 5,
+    };
+    const result = splitAnimationsInScript(script, splitOpts);
+    const parsed = parseGsapScript(result);
+    const forOriginal = parsed.animations.filter((a) => a.targetSelector === "#el1");
+    const forNew = parsed.animations.filter((a) => a.targetSelector === "#el1-split");
+    expect(forOriginal.length).toBe(0);
+    expect(forNew.length).toBe(1);
+    expect(forNew[0]!.keyframes).toBeDefined();
+  });
+
+  it("keeps keyframes animation entirely before split", () => {
+    const script = `${baseScript}\ntl.to("#el1", { keyframes: [{ opacity: 1, duration: 0.5 }, { scale: 1.2, duration: 0.5 }] }, 0);`;
+    const splitOpts = {
+      originalId: "el1",
+      newId: "el1-split",
+      splitTime: 3,
+      elementStart: 0,
+      elementDuration: 5,
+    };
+    const result = splitAnimationsInScript(script, splitOpts);
+    const parsed = parseGsapScript(result);
+    const forNew = parsed.animations.filter((a) => a.targetSelector === "#el1-split");
+    expect(forNew.length).toBe(0);
   });
 });
