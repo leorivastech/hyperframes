@@ -1623,18 +1623,18 @@ export function removeAllKeyframesFromScript(script: string, animationId: string
   const kfNode = findKeyframesObjectNode(loc.target.call.varsArg);
   if (!kfNode) return script;
 
-  // Collect all percentage keyframe entries, sorted
   const kfEntries = filterPercentageProps(kfNode)
     .map((p: any) => ({ pct: percentageFromKey(propKeyName(p)!), prop: p }))
     .filter((e) => !Number.isNaN(e.pct))
     .sort((a, b) => a.pct - b.pct);
   if (kfEntries.length === 0) return script;
 
-  const lastRecord = objectExpressionToRecord(
-    kfEntries[kfEntries.length - 1]!.prop.value,
-    loc.parsed.scope,
-  );
-  collapseKeyframesToFlat(loc.target.call.varsArg, lastRecord);
+  // For to()/set(): collapse to last keyframe (the destination = visible state).
+  // For from(): collapse to first keyframe (the starting state).
+  const method = loc.target.call.method;
+  const collapseEntry = method === "from" ? kfEntries[0]! : kfEntries[kfEntries.length - 1]!;
+  const record = objectExpressionToRecord(collapseEntry.prop.value, loc.parsed.scope);
+  collapseKeyframesToFlat(loc.target.call.varsArg, record);
 
   return recast.print(loc.parsed.ast).code;
 }

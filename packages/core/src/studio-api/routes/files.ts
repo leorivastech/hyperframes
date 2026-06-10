@@ -197,15 +197,12 @@ function updateReferences(projectDir: string, oldPath: string, newPath: string):
  * contains GSAP timeline code, and return both its text content and a
  * function that replaces that script block and serialises back to HTML.
  */
-function extractGsapScriptBlock(
-  html: string,
-): { scriptText: string; replaceScript: (newText: string) => string } | null {
+function extractGsapScriptBlock(html: string): {
+  scriptText: string;
+  document: Document;
+  replaceScript: (newText: string) => string;
+} | null {
   const { document } = parseHTML(html);
-  // linkedom's querySelectorAll doesn't descend into <template> content, but
-  // sub-compositions wrap their markup (and the GSAP <script>) in a <template>.
-  // Search top-level scripts first, then each template's own scripts. Operate
-  // on the template element directly (NOT .content) so textContent writes are
-  // reflected in document.toString().
   const scripts = [
     ...document.querySelectorAll("script:not([src])"),
     ...Array.from(document.querySelectorAll("template")).flatMap((tmpl) =>
@@ -221,6 +218,7 @@ function extractGsapScriptBlock(
     ) {
       return {
         scriptText: content,
+        document,
         replaceScript(newText: string): string {
           script.textContent = newText;
           return document.toString();
@@ -229,6 +227,64 @@ function extractGsapScriptBlock(
     }
   }
   return null;
+}
+
+function stripStudioEditsFromTarget(document: Document, selector: string): number {
+  if (!selector) return 0;
+  let stripped = 0;
+  try {
+    for (const el of document.querySelectorAll(selector)) {
+      if (!el.getAttribute("data-hf-studio-path-offset")) continue;
+      const htmlEl = el as unknown as HTMLElement;
+      const originalTranslate = el.getAttribute("data-hf-studio-original-inline-translate");
+      htmlEl.style.removeProperty("--hf-studio-offset-x");
+      htmlEl.style.removeProperty("--hf-studio-offset-y");
+      if (originalTranslate) {
+        htmlEl.style.setProperty("translate", originalTranslate);
+      } else {
+        htmlEl.style.removeProperty("translate");
+      }
+      el.removeAttribute("data-hf-studio-path-offset");
+      el.removeAttribute("data-hf-studio-original-translate");
+      el.removeAttribute("data-hf-studio-original-inline-translate");
+      stripped++;
+    }
+  } catch {
+    // Invalid selector — skip silently.
+  }
+  return stripped;
+}
+
+function bakeVisibilityOnDelete(document: Document, anim: GsapAnimation): void {
+  let finalOpacity: number | string | undefined;
+  if (anim.keyframes) {
+    const kfs = anim.keyframes.keyframes;
+    for (let i = kfs.length - 1; i >= 0; i--) {
+      if ("opacity" in kfs[i]!.properties) {
+        finalOpacity = kfs[i]!.properties.opacity;
+        break;
+      }
+    }
+  } else if (anim.method === "to" || anim.method === "set") {
+    if ("opacity" in anim.properties) finalOpacity = anim.properties.opacity;
+  } else if (anim.method === "fromTo") {
+    if ("opacity" in anim.properties) finalOpacity = anim.properties.opacity;
+  }
+  if (finalOpacity == null) {
+    return;
+  }
+  if (typeof finalOpacity === "string" && /^[+\-*]=/.test(finalOpacity)) {
+    return;
+  }
+  const numOpacity = Number(finalOpacity);
+  if (!Number.isFinite(numOpacity) || numOpacity === 0) return;
+  try {
+    for (const el of document.querySelectorAll(anim.targetSelector)) {
+      (el as unknown as HTMLElement).style.setProperty("opacity", String(numOpacity));
+    }
+  } catch {
+    // Invalid selector — skip silently.
+  }
 }
 
 /** Lazy-load gsapParser to avoid pulling recast into every file-route import. */
@@ -604,7 +660,7 @@ export function registerFileRoutes(api: Hono, adapter: StudioApiAdapter): void {
         properties: Record<string, number | string>;
         fromProperties?: Record<string, number | string>;
       }
-    | { type: "delete"; animationId: string }
+    | { type: "delete"; animationId: string; stripStudioEdits?: boolean }
     | {
         type: "add-property";
         animationId: string;
@@ -702,8 +758,28 @@ export function registerFileRoutes(api: Hono, adapter: StudioApiAdapter): void {
       return c.json({ error: "mutation type required" }, 400);
     }
 
-    const html = readFileSync(res.absPath, "utf-8");
-    const block = extractGsapScriptBlock(html);
+    let html = readFileSync(res.absPath, "utf-8");
+    let block = extractGsapScriptBlock(html);
+    if (!block && (body.type === "add" || body.type === "add-with-keyframes")) {
+      const compId = html.match(/data-composition-id="([^"]+)"/)?.[1] ?? "main";
+      const { GSAP_CDN } = await import("../../templates/constants.js");
+      const gsapCdn = `<script src="${GSAP_CDN}"></script>`;
+      const bootstrap = [
+        gsapCdn,
+        "<script>",
+        "window.__timelines = window.__timelines || {};",
+        `const tl = gsap.timeline({ paused: true });`,
+        `window.__timelines["${compId}"] = tl;`,
+        "</script>",
+      ].join("\n");
+      if (html.includes("</body>")) {
+        html = html.replace("</body>", `${bootstrap}\n</body>`);
+      } else {
+        html += `\n${bootstrap}`;
+      }
+      writeFileSync(res.absPath, html, "utf-8");
+      block = extractGsapScriptBlock(html);
+    }
     if (!block) {
       return c.json({ error: "no GSAP script found in file" }, 400);
     }
@@ -777,6 +853,11 @@ export function registerFileRoutes(api: Hono, adapter: StudioApiAdapter): void {
         break;
       }
       case "delete": {
+        const delTarget = requireAnimation(block.scriptText, body.animationId);
+        if (!("err" in delTarget) && body.stripStudioEdits) {
+          stripStudioEditsFromTarget(block.document, delTarget.anim.targetSelector);
+          bakeVisibilityOnDelete(block.document, delTarget.anim);
+        }
         newScript = removeAnimationFromScript(block.scriptText, body.animationId);
         break;
       }
@@ -855,6 +936,10 @@ export function registerFileRoutes(api: Hono, adapter: StudioApiAdapter): void {
       }
       case "remove-all-keyframes": {
         const { removeAllKeyframesFromScript } = await loadGsapParser();
+        const preCollapse = requireAnimation(block.scriptText, body.animationId);
+        if (!("err" in preCollapse)) {
+          bakeVisibilityOnDelete(block.document, preCollapse.anim);
+        }
         newScript = removeAllKeyframesFromScript(block.scriptText, body.animationId);
         break;
       }

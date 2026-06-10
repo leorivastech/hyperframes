@@ -300,6 +300,7 @@ export const TreeFile = memo(function TreeFile({
   onContextMenu,
   inlineInput,
   onDragStart,
+  lintInfo,
 }: {
   node: TreeNode;
   depth: number;
@@ -308,6 +309,7 @@ export const TreeFile = memo(function TreeFile({
   onContextMenu: (e: React.MouseEvent, path: string, isFolder: boolean) => void;
   inlineInput: InlineInputState | null;
   onDragStart: (e: React.DragEvent, path: string) => void;
+  lintInfo?: { count: number; messages: string[] };
 }) {
   const isActive = node.fullPath === activeFile;
   const isRenaming = inlineInput?.mode === "rename" && inlineInput.originalPath === node.fullPath;
@@ -345,7 +347,15 @@ export const TreeFile = memo(function TreeFile({
       style={{ paddingLeft: `${8 + depth * 12 + 14}px` }}
     >
       <FileIcon path={node.name} />
-      <span className="truncate">{node.name}</span>
+      <span className="truncate flex-1">{node.name}</span>
+      {lintInfo && lintInfo.count > 0 && (
+        <span
+          className="flex-shrink-0 min-w-[16px] rounded-full bg-amber-500/20 px-1 text-[8px] font-bold text-amber-400 text-center mr-1"
+          title={lintInfo.messages.join("\n")}
+        >
+          {lintInfo.count}
+        </span>
+      )}
     </button>
   );
 });
@@ -365,6 +375,7 @@ export const TreeFolder = memo(function TreeFolder({
   onDrop,
   onDragLeave,
   dragOverFolder,
+  lintFindingsByFile,
 }: {
   node: TreeNode;
   depth: number;
@@ -378,6 +389,7 @@ export const TreeFolder = memo(function TreeFolder({
   onDrop: (e: React.DragEvent, folderPath: string) => void;
   onDragLeave: () => void;
   dragOverFolder: string | null;
+  lintFindingsByFile?: Map<string, { count: number; messages: string[] }>;
 }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const toggle = useCallback(() => setIsOpen((v) => !v), []);
@@ -459,6 +471,7 @@ export const TreeFolder = memo(function TreeFolder({
                 onContextMenu={onContextMenu}
                 inlineInput={inlineInput}
                 onDragStart={onDragStart}
+                lintInfo={lintFindingsByFile?.get(child.fullPath)}
               />
             ) : child.children.size > 0 ? (
               <TreeFolder
@@ -475,6 +488,7 @@ export const TreeFolder = memo(function TreeFolder({
                 onDrop={onDrop}
                 onDragLeave={onDragLeave}
                 dragOverFolder={dragOverFolder}
+                lintFindingsByFile={lintFindingsByFile}
               />
             ) : (
               <TreeFile
@@ -486,6 +500,7 @@ export const TreeFolder = memo(function TreeFolder({
                 onContextMenu={onContextMenu}
                 inlineInput={inlineInput}
                 onDragStart={onDragStart}
+                lintInfo={lintFindingsByFile?.get(child.fullPath)}
               />
             ),
           )}
